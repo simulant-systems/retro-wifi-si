@@ -1525,18 +1525,19 @@ ZResult ZCommand::doUpdateFirmware(int vval, uint8_t *vbuf, int vlen, bool isNum
 
   uint8_t buf[255];
   int bufSize = 254;
+  char firmwareName[100];
 #if USE_DEVUPDATER
   char *updaterHost = "192.168.1.10";
   int updaterPort = 8080;
   bool updaterSSL = false;
   char *updaterVersionPath = "/simulant-latest-version.txt";
-  char *updaterBinPath = "/simulant-firmware.bin";
+  char *updaterBinPrefix = "/simulant-firmware-";
 #else
   char *updaterHost = "raw.githubusercontent.com";
   int updaterPort = 443;
   bool updaterSSL = true;
   char *updaterVersionPath = "/simulant-systems/zimodem-releases/main/LATEST";
-  char *updaterBinPath = "/simulant-systems/zimodem-releases/main/simulant-latest.bin";
+  char *updaterBinPrefix = "/simulant-systems/zimodem-releases/main/simulant-latest";
 #endif
   if((!doWebGetBytes(updaterHost, updaterPort, updaterVersionPath, updaterSSL, buf, &bufSize))||(bufSize<=0))
     return ZERROR;
@@ -1553,14 +1554,14 @@ ZResult ZCommand::doUpdateFirmware(int vval, uint8_t *vbuf, int vlen, bool isNum
       vval=6502;
     }
   }
-
+  
   while((bufSize>0)
   &&((buf[bufSize-1]==10)||(buf[bufSize-1]==13)))
   {
     bufSize--;
     buf[bufSize] = 0;
   }
-
+  
   if((strlen(ZIMODEM_VERSION)==bufSize) && memcmp(buf,ZIMODEM_VERSION,strlen(ZIMODEM_VERSION))==0)
   {
     serial.prints("Your modem is up-to-date.");
@@ -1578,145 +1579,119 @@ ZResult ZCommand::doUpdateFirmware(int vval, uint8_t *vbuf, int vlen, bool isNum
   }
   if(vval != 6502)
     return ZOK;
-
+  
   serial.printf("Updating to %s...", buf);
   serial.prints(EOLN);
-  serial.prints("Please wait - firmware update takes approx 5 minutes.");
+  serial.prints("Please wait, this takes about 5 minutes.");
   serial.prints(EOLN);
   serial.flush();
 
-  // Single-pass download with range-request reconnect.
-  // Update.begin() is called once; reconnect with Range: bytes=X- every RECONNECT_EVERY bytes
-  // to avoid TCP degradation from flash sector erases (~40ms, interrupts disabled).
+  sprintf(firmwareName,"%s.bin", updaterBinPrefix);
+
+  // Get total firmware size from a fresh connection before starting Update.begin()
   uint32_t respLength=0;
-  WiFiClient *c=null;
-  for(int initTry=0; initTry<5 && c==null; initTry++)
   {
-    if(initTry>0) delay(3000);
-    c = doWebGetStream(updaterHost, updaterPort, updaterBinPath, updaterSSL, &respLength, 2048);
+    WiFiClient *szc = doWebGetStream(updaterHost, updaterPort, firmwareName, updaterSSL, &respLength);
+    if(szc==null || respLength==0) { if(szc){szc->stop();delete szc;} serial.prints("Could not connect."); serial.prints(EOLN); return ZERROR; }
+    szc->stop(); delete szc;
   }
-  if(c==null)
+
+  if(!Update.begin(respLength))
   {
-    serial.prints("Could not connect to update server. Please try again.");
-    serial.prints(EOLN);
+    serial.prints("Could not start update."); serial.prints(EOLN);
     return ZERROR;
   }
 
-  uint8_t *sectorBuf = (uint8_t*)malloc(512);
-  if(!sectorBuf)
-  {
-    serial.prints("Insufficient memory for update. Please try again.");
-    serial.prints(EOLN);
-    c->stop(); delete c;
-    return ZERROR;
-  }
-
-  uint32_t heapNow = ESP.getFreeHeap();
-  uint8_t *_updDummy = (heapNow > 8450) ? (uint8_t*)malloc(heapNow - 8000) : null;
-  bool updateBegun = Update.begin((respLength == 0) ? ESP.getFreeSketchSpace() : respLength);
-  if(_updDummy) { free(_updDummy); _updDummy = null; }
-  if(!updateBegun)
-  {
-    serial.prints("Could not start update. Please try again.");
-    serial.prints(EOLN);
-    free(sectorBuf);
-    c->stop(); delete c;
-    return ZERROR;
-  }
-
-  uint32_t dlWritten=0;
-  unsigned long dlLastData=millis();
-  bool dlSuccess=false;
-  int reconnects=0;
-  int lastPct=0;
-  const int MAX_RECONNECTS=100;
-  const uint32_t RECONNECT_EVERY=8192;
-  uint32_t nextReconnectAt=RECONNECT_EVERY;
+  // Download in 8192-byte chunks, reconnecting between each using Range: bytes=X-
+  // This prevents TCP dropping due to flash sector erases (~40ms, interrupts disabled).
+  // Each reconnect is a fresh call to doWebGetStream with a Range header injected inline.
+  uint32_t dlWritten = 0;
+  int lastPct = 0;
+  const uint32_t CHUNK = 8192;
+  uint8_t dbuf[256];
 
   while(dlWritten < respLength)
   {
-    if(c==null)
-    {
-      if(reconnects >= MAX_RECONNECTS) break;
-      for(int y=0; y<200; y++) yield();
-      uint32_t chunkLen=0;
-      c = doWebGetStream(updaterHost, updaterPort, updaterBinPath, updaterSSL, &chunkLen, 2048, dlWritten);
-      reconnects++;
-      if(!c) { delay(3000); continue; }
-      dlLastData=millis();
-    }
+    // Open a ranged connection for the next chunk
+    uint32_t chunkRemain = min(CHUNK, respLength - dlWritten);
+    uint32_t chunkLen = 0;
 
-    if(c!=null && dlWritten >= nextReconnectAt)
-    {
-      nextReconnectAt += RECONNECT_EVERY;
-      c->stop(); delete c; c=null;
-      continue;
-    }
+    // Build a direct ranged request using createWiFiClient
+    WiFiClient *c = createWiFiClient(updaterSSL);
+    if(!c->connect(updaterHost, updaterPort)) { delete c; delay(3000); continue; }
+    c->printf("GET /%s HTTP/1.1\r\n", firmwareName[0]=='/'?firmwareName+1:firmwareName);
+    c->printf("Host: %s\r\n", updaterHost);
+    c->printf("Range: bytes=%u-%u\r\n", dlWritten, dlWritten + chunkRemain - 1);
+    c->printf("Connection: close\r\n\r\n");
 
-    uint32_t toFill=(uint32_t)min((uint32_t)512, respLength-dlWritten);
-    uint32_t filled=0;
-    while(filled < toFill)
+    // Read response headers
+    String ln = "";
+    while(c->connected() || c->available()>0)
     {
-      int navail=c->available();
-      if(navail > 0)
+      yield();
+      if(!c->available()) continue;
+      char ch = (char)c->read();
+      if(ch=='\r') continue;
+      if(ch=='\n')
       {
-        dlLastData=millis();
-        int want=(int)min((uint32_t)min(navail,256), toFill-filled);
-        int n=c->read(sectorBuf+filled,(size_t)want);
-        if(n > 0) filled+=(uint32_t)n;
+        if(ln.length()==0) break;
+        ln.toLowerCase();
+        if(ln.startsWith("content-length:"))
+          chunkLen = atoi(ln.c_str()+15);
+        ln = "";
       }
-      else if(!c->connected() && c->available()==0)
-      { c->stop(); delete c; c=null; break; }
-      else if(millis()-dlLastData > 60000)
-      { c->stop(); delete c; c=null; break; }
+      else if(ln.length()<256) ln.concat(ch);
+    }
+
+    if(chunkLen == 0) { c->stop(); delete c; delay(3000); continue; }
+
+    // Read body and write to flash
+    uint32_t chunkWritten = 0;
+    unsigned long lastData = millis();
+    while(chunkWritten < chunkLen)
+    {
+      int avail = c->available();
+      if(avail > 0)
+      {
+        lastData = millis();
+        int want = min((int)sizeof(dbuf), min(avail, (int)(chunkLen-chunkWritten)));
+        int n = c->read(dbuf, want);
+        if(n > 0)
+        {
+          bool atBoundary = ((dlWritten+chunkWritten) % 4096 == 0);
+          if(atBoundary) for(int y=0;y<20;y++) yield();
+          Update.write(dbuf, n);
+          if(atBoundary) for(int y=0;y<200;y++) yield();
+          chunkWritten += n;
+        }
+      }
+      else if(!c->connected()) break;
+      else if(millis()-lastData > 30000) break;
       else yield();
     }
+    c->stop(); delete c;
 
-    if(filled==0) continue;
-
-    bool atSectorBoundary = ((dlWritten % 4096)==0);
-    if(atSectorBoundary) for(int y=0; y<20; y++) yield();
-    size_t fw=Update.write(sectorBuf,(size_t)filled);
-    int postYields = atSectorBoundary ? 200 : 5;
-    for(int y=0; y<postYields; y++) yield();
-
-    if(fw != (size_t)filled) break;
-    dlWritten+=(uint32_t)filled;
-
-    if(respLength > 0)
+    dlWritten += chunkWritten;
+    int pct = (int)(dlWritten*100/respLength);
+    pct = pct - pct%10;
+    if(pct > lastPct && pct < 100)
     {
-      int pct=(int)(dlWritten*100/respLength);
-      pct=pct-pct%10;
-      if(pct>lastPct && pct<100)
-      {
-        lastPct=pct;
-        serial.printf("Progress: %d%%",pct);
-        serial.prints(EOLN); serial.flush();
-      }
+      lastPct = pct;
+      serial.printf("Progress: %d%%", pct);
+      serial.prints(EOLN); serial.flush();
     }
+
+    if(chunkWritten < chunkLen) { delay(2000); } // partial chunk — retry from dlWritten
   }
 
-  if(c!=null) { c->stop(); delete c; }
-  free(sectorBuf);
-
-  if(dlWritten==respLength) dlSuccess=true;
-  else Update.end(false);
-
-  if(!dlSuccess)
+  if(dlWritten != respLength || !Update.end())
   {
-    serial.prints("Update failed. Please try again.");
-    serial.prints(EOLN);
-    return ZERROR;
-  }
-  if(!Update.end())
-  {
-    serial.prints("Update failed. Please try again.");
-    serial.prints(EOLN);
+    Update.end(false);
+    serial.prints("Update failed. Please try again."); serial.prints(EOLN);
     return ZERROR;
   }
   serial.prints("Update complete! Modem will now restart.");
-  serial.prints(EOLN);
-  serial.flush();
+  serial.prints(EOLN); serial.flush();
   delay(500);
   ESP.restart();
   return ZOK;
