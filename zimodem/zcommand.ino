@@ -3649,7 +3649,7 @@ void ZCommand::showInitMessage()
   HWSerial.setTimeout(60000);
   serial.prints(ZIMODEM_VERSION);
   serial.prints(commandMode.EOLN);
-  serial.prints("Firmware based on Bo Zimmerman's Zimodem");
+  serial.prints("Firmware uses Bo Zimmerman's Zimodem");
   //serial.prints(" (");
   //serial.prints(compile_date);
   //serial.prints(")");
@@ -3678,7 +3678,7 @@ void ZCommand::showInitMessage()
       serial.prints(("ERROR ON " + wifiSSI).c_str());
   }
   else
-    serial.prints("INITIALIZED");
+    serial.prints("INITIALISED");
   serial.prints(commandMode.EOLN);
   serial.prints("READY.");
   serial.prints(commandMode.EOLN);
