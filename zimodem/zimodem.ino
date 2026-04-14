@@ -585,6 +585,7 @@ void setup()
    pinSupport[39]=true;
 # endif
 #else
+  Serial.setDebugOutput(false);
   pinSupport[0]=true;
   pinSupport[2]=true;
   if((ESP.getFlashChipRealSize()/1024)>=4096) // assume this is a strykelink/esp12e

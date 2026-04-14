@@ -3580,6 +3580,8 @@ void ZCommand::showInitMessage()
   SPIFFS.info(info);
   int totalSPIFFSSize = info.totalBytes;
 #endif
+  serial.printb(0x0f); // SI: cancel any spurious SO from ESP8266 bootloader noise
+  serial.prints(commandMode.EOLN);
   serial.prints("Zimodem ");
 #ifdef ZIMODEM_ESP32
   serial.prints("ESP32 ");
