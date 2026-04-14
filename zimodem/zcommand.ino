@@ -3645,15 +3645,11 @@ void ZCommand::showInitMessage()
 #endif
   serial.printb(0x0f); // SI: cancel any spurious SO from ESP8266 bootloader noise
   serial.prints(commandMode.EOLN);
-  serial.prints("Zimodem ");
-#ifdef ZIMODEM_ESP32
-  serial.prints("ESP32 ");
-#else
-  serial.prints("ESP8266 ");
-#endif
-  serial.prints("Firmware v");
+  serial.prints("Retro WiFi SI Modem v");
   HWSerial.setTimeout(60000);
   serial.prints(ZIMODEM_VERSION);
+  serial.prints(commandMode.EOLN);
+  serial.prints("Firmware based on Bo Zimmerman's Zimodem");
   //serial.prints(" (");
   //serial.prints(compile_date);
   //serial.prints(")");
