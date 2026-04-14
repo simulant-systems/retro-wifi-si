@@ -1536,8 +1536,8 @@ ZResult ZCommand::doUpdateFirmware(int vval, uint8_t *vbuf, int vlen, bool isNum
   char *updaterHost = "raw.githubusercontent.com";
   int updaterPort = 443;
   bool updaterSSL = true;
-  char *updaterVersionPath = "/simulant-systems/zimodem-releases/main/LATEST";
-  char *updaterBinPrefix = "/simulant-systems/zimodem-releases/main/simulant-latest";
+  char *updaterVersionPath = "/simulant-systems/retro-wifi-si/main/LATEST";
+  char *updaterBinPrefix = "/simulant-systems/retro-wifi-si/main/simulant-latest";
 #endif
   if((!doWebGetBytes(updaterHost, updaterPort, updaterVersionPath, updaterSSL, buf, &bufSize))||(bufSize<=0))
     return ZERROR;
