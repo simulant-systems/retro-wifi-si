@@ -23,18 +23,25 @@
 # include "wifisshclient.h"
 #endif
 
-static WiFiClient *createWiFiClient(bool SSL, int sslRecvBuf = 4096)
+static WiFiClient *createWiFiClient(bool SSL)
 {
+#ifdef ZIMODEM_ESP32
   if(SSL)
   {
     WiFiClientSecure *c = new WiFiClientSecure();
     c->setInsecure();
-#ifndef ZIMODEM_ESP32
-    if(sslRecvBuf > 0)
-      c->setBufferSizes(sslRecvBuf, 512);
-#endif
     return c;
   }
+  else
+#else
+  if(SSL)
+  {
+    BearSSL::WiFiClientSecure *c = new BearSSL::WiFiClientSecure();
+    c->setInsecure();
+    c->setBufferSizes(4096, 512);
+    return c;
+  }
+#endif
   return new WiFiClient();
 }
 
