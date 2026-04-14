@@ -3645,7 +3645,7 @@ void ZCommand::showInitMessage()
 #endif
   serial.printb(0x0f); // SI: cancel any spurious SO from ESP8266 bootloader noise
   serial.prints(commandMode.EOLN);
-  serial.prints("Retro WiFi SI Modem v");
+  serial.prints("Simulant Retro WiFi SI Modem v");
   HWSerial.setTimeout(60000);
   serial.prints(ZIMODEM_VERSION);
   serial.prints(commandMode.EOLN);
